@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pydantic import ValidationError
 from sqlalchemy import text
 
-from database import DatabaseSettings, engine, get_session
+from app.infrastructure.database import DatabaseSettings, engine, get_session
 from main import app, lifespan
 
 

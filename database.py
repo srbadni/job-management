@@ -1,64 +1,8 @@
+"""Keep the existing connection-check command: uv run python -m database."""
+
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import URL, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-
-class DatabaseSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=Path(__file__).with_name(".env"),
-        env_file_encoding="utf-8",
-        extra="ignore",
-        hide_input_in_errors=True,
-    )
-
-    postgres_host: str = Field(default="localhost", min_length=1)
-    postgres_port: int = Field(default=5432, ge=1, le=65535)
-    postgres_db: str = Field(min_length=1)
-    postgres_user: str = Field(min_length=1)
-    postgres_password: SecretStr = Field(min_length=1)
-
-    @property
-    def url(self) -> URL:
-        # Build the URL without manually escaping passwords or other components.
-        return URL.create(
-            "postgresql+asyncpg",
-            username=self.postgres_user,
-            password=self.postgres_password.get_secret_value(),
-            host=self.postgres_host,
-            port=self.postgres_port,
-            database=self.postgres_db,
-        )
-
-
-settings = DatabaseSettings()
-engine = create_async_engine(
-    settings.url,
-    pool_pre_ping=True,
-    connect_args={"timeout": 5},
-)
-session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-
-async def get_session() -> AsyncIterator[AsyncSession]:
-    # Closing also rolls back any uncommitted transaction, including on errors.
-    async with session_factory() as session:
-        yield session
-
-
-async def check_connection() -> None:
-    try:
-        async with engine.connect() as connection:
-            result = await connection.scalar(text("SELECT 1"))
-            if result != 1:
-                raise RuntimeError("Unexpected database check result")
-            print("PostgreSQL connection OK: SELECT 1 = 1")
-    finally:
-        await engine.dispose()
+from app.infrastructure.database import check_connection
 
 
 if __name__ == "__main__":
