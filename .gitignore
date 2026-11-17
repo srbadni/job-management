@@ -1,0 +1,78 @@
+# Secrets and local environment settings
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.hypothesis/
+
+# Test coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+coverage.json
+junit.xml
+.tox/
+.nox/
+
+# Python build and packaging output
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Local logs and runtime files
+*.log
+*.pid
+*.pid.lock
+
+# Local SQLite databases
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite3-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Celery scheduler state
+celerybeat-schedule*
+celerybeat.pid
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local tooling settings
+.python-version
+
+# Keep dependency lockfiles and Alembic migrations in Git.
+# Add project-specific upload/data directories only if they contain runtime data.
