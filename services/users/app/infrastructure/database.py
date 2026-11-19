@@ -1,21 +1,14 @@
 import asyncio
 from collections.abc import AsyncIterator
-from pathlib import Path
 
 from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.infrastructure.settings import LocalSettings
 
-class DatabaseSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parents[2] / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        hide_input_in_errors=True,
-    )
 
+class DatabaseSettings(LocalSettings):
     postgres_host: str = Field(default="localhost", min_length=1)
     postgres_port: int = Field(default=5432, ge=1, le=65535)
     postgres_db: str = Field(min_length=1)

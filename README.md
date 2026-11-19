@@ -1,194 +1,167 @@
 # Job Management
 
-A small FastAPI application using Python 3.12+, `uv`, SQLAlchemy 2.x, and
-`asyncpg`. Run the following commands from the repository root. Docker with the
-Compose plugin is required for the local PostgreSQL service.
+A monorepo for a hiring platform. The running backend is the Users service,
+built with Python 3.12+, uv, FastAPI, async SQLAlchemy, PostgreSQL and Alembic.
+It creates and retrieves users and retains the existing hello and database
+health routes.
 
-## Configure and install
+## Repository layout
 
-```bash
-if [ ! -f .env ]; then cp .env.example .env; fi
-# For a new .env, replace POSTGRES_PASSWORD with a local development password.
-uv sync --locked --python 3.12
+```text
+compose.yaml             Local stack for the Users service and infrastructure
+.env.example             Root development configuration template
+services/users/          FastAPI service, uv project and lockfile, migrations, tests, Dockerfile
+services/recruiting/     Proposed job postings and application pipelines
+services/candidates/     Proposed candidate profiles and preferences
+services/documents/      Proposed document metadata and object storage access
+services/ai-assessment/  Proposed AI-assisted assessments for human review
+services/notifications/ Proposed communication templates and delivery
+apps/web/               Proposed Next.js App Router frontend
+apps/bff/               Proposed browser-facing backend boundary
 ```
 
-`.env` is ignored by Git. It contains local settings, not production credentials.
-The app loads it from the repository root; exported environment variables take
-precedence. All three of `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`
-are required. The host defaults to `localhost`, and the port defaults to `5432`.
-SQLAlchemy builds the `postgresql+asyncpg` URL from these fields, so passwords
-containing URL-special characters do not need URL encoding. Single-quote values
-in `.env` when they contain literal `$` or `#`, so both dotenv and Compose read
-the same password.
+Each backend service will own its runtime, dependency lockfile, migrations and
+data. The proposed boundaries can evolve with the product. Within Users,
+`domain` contains users and email invariants, `application` contains use cases
+and ports, `infrastructure` implements adapters, and `presentation` maps HTTP
+requests and errors. `main.py` wires the layers together. Other services should
+integrate through explicit contracts and avoid importing Users internals or
+querying its tables.
 
-## Start PostgreSQL
+## Run with Docker Compose
 
-```bash
-docker compose up -d --wait postgres
-docker compose ps
-```
-
-Compose runs PostgreSQL 17, publishes its port on loopback only, checks readiness
-with `pg_isready`, and retains data in the `postgres_data` named volume. The
-healthcheck verifies server readiness; the application checks below also verify
-authentication and query execution.
+From the repository root, use Docker with the Compose v2 plugin:
 
 ```bash
-docker compose stop postgres          # Keep containers and data
-docker compose down                   # Remove containers, retain data
-# docker compose down -v              # Destructive: deletes the local database
+if [ ! -e .env ]; then cp .env.example .env; fi
+# Edit .env and replace the example passwords and secret key with local values.
+docker compose up --build --wait
+docker compose ps -a
 ```
 
-PostgreSQL's initialization variables apply only to an empty volume. Changing
-the username, database, or password in `.env` does not update an existing
-database; update it through PostgreSQL, or deliberately recreate disposable local
-data. Do not remove a volume containing data you need.
+If you already have a `.env` from the PostgreSQL-only setup, add the new
+settings from `.env.example` and keep the PostgreSQL credentials that match
+your existing volume. Use single quotes for values containing literal
+`$` or `#`. PostgreSQL and RabbitMQ apply their initialization credentials
+when their data directories are empty. Changing the file alone does not
+rotate those accounts on a populated volume.
 
-## Migrations and FastAPI on the host
+Compose builds one Users image. The one-shot `migrate` service runs
+`alembic upgrade head` with that image once PostgreSQL is healthy. The API
+starts after the migration succeeds. An exited migration container with code
+0 is expected. Inspect failures with `docker compose logs migrate app`.
 
-```bash
-uv run --locked alembic upgrade head
-uv run --locked alembic current
-uv run --locked uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-The app and Alembic share the same environment settings and asyncpg URL; no
-credentials are stored in `alembic.ini`. Apply migrations before serving requests.
-Startup never calls `create_all`. The initial migration creates `users` with a
-UUID primary key, non-null email and timezone-aware `created_at`, a named email
-uniqueness constraint, and a lowercase storage check. Future schema changes:
-
-```bash
-uv run --locked alembic revision --autogenerate -m "describe schema change"
-# Review the generated migration before applying it.
-uv run --locked alembic upgrade head
-uv run --locked alembic check
-# uv run --locked alembic downgrade -1  # Destructive: initial downgrade drops users
-```
-
-For this mode, keep `POSTGRES_HOST=localhost` and set `POSTGRES_PORT` to the
-published port (default `5432`). If that port is occupied, choose another port in
-`.env` and run `docker compose up -d --wait postgres` again.
-
-## FastAPI inside Docker
-
-`localhost` inside an application container means that container, not PostgreSQL.
-When running FastAPI in the **same Compose network**, explicitly override its
-environment:
+If your build network uses a TLS inspection proxy, give the dependency
+build the trusted CA bundle using a local Compose override. The bundle
+must contain the normal public roots and your proxy CA.
 
 ```yaml
-# Add these settings to your FastAPI container service, if you have one.
-environment:
-  POSTGRES_HOST: postgres
-  POSTGRES_PORT: "5432"
-depends_on:
-  postgres:
-    condition: service_healthy
+services:
+  app:
+    build:
+      secrets:
+        - build_ca_bundle
+secrets:
+  build_ca_bundle:
+    file: /path/to/trusted-ca-bundle.pem
 ```
 
-Pass `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` to that service as
-well (for local development, `env_file: .env` is one option). The environment
-overrides the host defaults in `.env`. Use PostgreSQL's internal port `5432`
-even if its published host port differs. A standalone application container
-must join this Compose project's network for the `postgres` hostname to resolve.
-Only the database is containerized by the supplied Compose file; there is no
-application image or automatic container detection.
+Pass the override with `docker compose -f compose.yaml -f /path/to/build-ca.yaml
+up --build --wait`. BuildKit mounts the bundle only for dependency
+installation.
 
-## Test the connection
+| Component | Address inside Compose | Default host port |
+| --- | --- | --- |
+| Users API | `app:8000` | `8000` |
+| PostgreSQL | `postgres:5432` | `5432` |
+| RabbitMQ (AMQP) | `rabbitmq:5672` | `5672` |
+| Redis | `redis:6379` | `6379` |
+| MinIO-compatible S3 API | `http://minio:9000` | `9000` |
+| Object storage console | `http://minio:9001` | `9001` |
 
-With PostgreSQL running, test the async engine directly without starting FastAPI:
+Host ports bind to `127.0.0.1`. The default Compose network provides service
+name resolution. The host ports can be changed in `.env` without changing the
+container addresses. PostgreSQL, RabbitMQ and object storage persist in named
+volumes. Redis is disposable and runs without persistence. `docker compose
+down` stops the stack and keeps the named volumes.
 
-```bash
-uv run --locked python -m database
-# PostgreSQL connection OK: SELECT 1 = 1
-```
+The `minio` service uses a pinned release of [PGSTY
+Silo](https://github.com/pgsty/silo), a maintained MinIO fork. This keeps the
+development image pullable after upstream MinIO ended community image
+distribution. Set `MINIO_IMAGE` to use a compatible image from a registry you
+can access. The image must support the server command and include `curl` for
+the readiness check.
 
-This command runs a real `SELECT 1`, exits nonzero on failure, and disposes the
-engine even if the query fails. With FastAPI running, test the request-scoped
-session and the existing routes:
+### Smoke checks
 
 ```bash
 curl --fail-with-body http://127.0.0.1:8000/health/db
-# {"status":"ok"}
-curl --fail-with-body http://127.0.0.1:8000/
-# {"message":"Hello World"}
-curl --fail-with-body http://127.0.0.1:8000/hello/User
-# {"message":"Hello User"}
+docker compose exec app python -m database
+docker compose exec app python -m app.infrastructure.check_connections
+docker compose exec app alembic current
 ```
 
-`/health/db` executes `SELECT 1` through `Depends(get_session)` and returns HTTP
-503 if the database is unavailable. Each request gets its own async session,
-which closes on success or error and rolls back uncommitted work. This low-level
-dependency never auto-commits. User use cases instead use the transaction boundary
-described below, which completes before the HTTP response is returned.
-FastAPI's lifespan disposes the engine's connection pool at shutdown.
+The infrastructure command performs an authenticated AMQP connection, a Redis
+`PING`, and an S3 `ListBuckets` request. It closes each client and exits
+nonzero if any check fails. The example S3 credentials are for the local
+server; this smoke check needs permission to list buckets. These clients are
+scoped to the smoke command, so the Users API and its database health check
+only depend on PostgreSQL.
 
-## Architecture and User example
-
-```text
-app/
-  domain/users.py          # User entity and email invariant; no web/ORM dependencies
-  application/
-    ports.py              # UserRepository contract and transaction factory type
-    users.py              # CreateUser and GetUser use cases
-    errors.py             # EmailAlreadyExists and UserNotFound
-  infrastructure/
-    database.py           # Async engine, sessions, environment settings
-    models.py             # SQLAlchemy Base and UserRow (separate from User)
-    users.py              # Repository, domain/ORM mapping, transaction adapter
-  presentation/
-    users.py              # FastAPI router and request/response schemas
-    errors.py             # Domain/application errors -> HTTP
-migrations/               # Alembic environment and versioned schema changes
-tests/unit/               # Domain/use cases with fakes, no database
-tests/integration/        # Real PostgreSQL, migrations, and HTTP tests
-main.py                   # Composition root; also retains the existing health routes
-database.py               # Compatibility entry point for the connection check
-```
-
-Dependencies point inward: `presentation -> application -> domain` and
-`infrastructure -> application/domain`. Only the composition root wires all
-layers together. Routers receive use cases, and use cases only know the repository
-contract and a transaction factory. Domain uses `email-validator` for syntax
-validation but never imports FastAPI, Pydantic, SQLAlchemy, or database settings.
-
-Each use case enters one transaction. The infrastructure adapter opens a fresh
-async session and uses `session.begin()` to commit on successful exit or roll back
-on errors. The session closes before the use case returns. Repositories flush
-but never commit. There is no generic repository, CQRS, event bus, or auth layer.
+The existing API exposes `GET /`, `GET /hello/{name}`,
+`GET /health/db`, `POST /users`, and `GET /users/{id}`. For example:
 
 ```bash
 curl --fail-with-body -X POST http://127.0.0.1:8000/users \
   -H 'Content-Type: application/json' -d '{"email":"alice@example.com"}'
-# 201: {"id":"<uuid>","email":"alice@example.com","created_at":"<UTC timestamp>"}
-curl --fail-with-body 'http://127.0.0.1:8000/users/<uuid>'
-# Replace <uuid> with the id returned by POST.
+# Use the returned id for GET /users/{id}.
 ```
 
-Emails are trimmed, validated without DNS, converted to ASCII for IDN domains,
-and stored in lowercase. Identity by email is case insensitive, including the
-local part; SMTPUTF8 local parts are not supported in this initial example.
-The database constraint, not a pre-insert lookup, resolves concurrent duplicate
-creates. Invalid input returns 422, duplicate email 409, and missing user 404.
-Other database integrity errors are not mislabeled as duplicate emails.
+User creation still validates and canonicalizes email. The database enforces
+uniqueness, and the API returns 422 for invalid input, 409 for duplicates and
+404 for unknown users.
 
-## Tests
+## Run and test the Users service on the host
+
+Use Python 3.12 and uv. To run the API on the host, start only its infrastructure
+from the repository root. If Compose already owns port 8000, stop its `app`
+service first or use a different port for Uvicorn.
 
 ```bash
-# No PostgreSQL, .env, or database credentials needed:
-uv run --locked python -m unittest discover -s tests/unit -v
-
-# Requires configured PostgreSQL and a role with CREATE permission on the database:
-docker compose up -d --wait postgres
-uv run --locked python -m unittest discover -s tests/integration -v
-
-# All tests (same PostgreSQL requirement):
-uv run --locked python -m unittest discover -s tests -v
+docker compose up -d --wait postgres rabbitmq minio redis
+cd services/users
+uv sync --locked --python 3.12
+uv run --locked alembic upgrade head
+uv run --locked python -m app.infrastructure.check_connections
+uv run --locked uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Unit tests exercise domain invariants, use cases, and transaction failures with
-in-memory fakes. Integration tests apply the real migrations in a uniquely named
-disposable schema per test, then drop only that schema. They do not truncate or
-drop application tables. They cover persistence round trips, rollback, concurrent
-uniqueness, HTTP error mapping, downgrade/upgrade, and the existing session/pool
-cleanup checks. `httpx` is a development dependency only.
+The host Python commands load the root `.env`. Exported variables take
+precedence. If you change `MINIO_PORT`, also update the host
+`MINIO_ENDPOINT`. Change the port in the HTTP examples if you override
+`APP_PORT` or the Uvicorn port.
+
+From `services/users`, run:
+
+```bash
+uv run --locked python -m unittest discover -s tests/unit -v
+uv run --locked python -m unittest discover -s tests -v
+uv run --locked alembic check
+```
+
+Unit tests need no infrastructure. The full suite needs PostgreSQL and a
+role that can create schemas in the configured database. User integration
+tests apply and exercise the real migrations in disposable schemas. Run
+`alembic check` against a database already upgraded to head.
+
+## Roadmap
+
+1. Refine service boundaries around job posting and application workflows.
+   Define API contracts and authorization boundaries while keeping ownership
+   of data explicit.
+2. Establish CI for the Users service and decide on deployment, secrets,
+   and operational monitoring before deploying independent services.
+3. Build the web shell and its initial Next.js BFF against versioned backend
+   APIs. Add messaging and storage contracts when a workflow requires them.
+4. Define data access, retention, human review and evaluation criteria before
+   introducing LLM-assisted hiring workflows.

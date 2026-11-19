@@ -7,7 +7,8 @@ class ArchitectureTests(unittest.TestCase):
     def test_inner_layers_do_not_import_frameworks_or_outer_layers(self):
         root = Path(__file__).resolve().parents[2] / "app"
         forbidden = (
-            "fastapi", "pydantic", "sqlalchemy", "asyncpg", "alembic",
+            "fastapi", "pydantic", "pydantic_settings", "sqlalchemy", "asyncpg", "alembic",
+            "aio_pika", "redis", "minio", "urllib3",
             "app.infrastructure", "app.presentation",
         )
         for layer in ("domain", "application"):
